@@ -5,43 +5,33 @@
 #include <Cameras/TapotekCamera.h>
 #include <ZCam.h>
 
-// UART к камере (TX - 3 / RX - 2)
 #define CAMERA_UART_TX 3
 #define CAMERA_UART_RX 2
 
-// Для логов UART (только если будете подключать отдельный UART USB)
 #define LOG_TX 6
 #define LOG_RX 5
 
-// Количество обрабатываемых каналов, можно уменьшить количество каналов, если не используете больше 8 (например), скорость обработки увеличится
 #define TOTAL_CHANNELS 16
 
-#define VIDEO_FORMAT_CHANNEL 4 // Канал для управления видео (режим тепловизора и управление выводимой камерой (окно в окне и т.п.))
-#define ZOOM_CHANNEL 0 // Канал для зумирования
-#define PITCH_TOGGLE_CHANNEL 3 // Канал для управления PITCH (жесткое задание вверх/по центру/вниз (90 градусов))
-#define PITCH_Y_CHANNEL 1 // Для мягкого управления PITCH (аккуратно, можно перенагрузить камеру)
-#define PITCH_X_CHANNEL 2 // Для мягкого управления PITCH (аккуратно, можно перенагрузить камеру)
+#define ZOOM_CHANNEL 0             // Servo output = 1
+#define PITCH_Y_CHANNEL 1          // Servo output = 2
+#define PITCH_X_CHANNEL 2          // Servo output = 3
+#define PITCH_TOGGLE_CHANNEL 3     // Servo output = 4
+#define VIDEO_FORMAT_CHANNEL 4     // Servo output = 5
+#define POSITION_CENTER_CHANNEL 5  // Servo output = 6
 
-// Для логирования, можно убрать если не используете, главное по коду дальше также удалите использование logSerial
-SoftwareSerial logSerial(LOG_TX, LOG_RX);
-
-// Порт для камеры
 SoftwareSerial camSerial(CAMERA_UART_TX, CAMERA_UART_RX);
-
-// Инициализация SBUS
 SBUS sbus(Serial);
 
-// Инициализация ZCam
 ZCam zcam;
-
-// Создание массива с PWM значениями каналов (немного отличаются от реальных, чаще всего от 270 до 1800 примерно)
 uint16_t channels[TOTAL_CHANNELS];
+uint16_t lastChannels[TOTAL_CHANNELS];
 
-// Сборка номеров каналов для мягкого управления PITCH камеры
 const uint8_t pitchChannels[2] = { PITCH_X_CHANNEL, PITCH_Y_CHANNEL };
 
 bool failsafe;
 bool lostFrame;
+bool brokenSignal = false;
 
 enum Move { MOVE_STOP,
             MOVE_UP,
@@ -49,15 +39,14 @@ enum Move { MOVE_STOP,
             MOVE_LEFT,
             MOVE_RIGHT };
 
-// Обработчик события управления режимом видео от тепловизора и модами окно в окне, а также переключение между тепловизором и обычной камерой
 bool onVideoFormatChange(const String& eventName, uint16_t ch[TOTAL_CHANNELS], const String& condition) {
   uint16_t channelPWM = ch[VIDEO_FORMAT_CHANNEL];
   TapotekCamera* cam = (TapotekCamera*)zcam.camera();
 
   if (cam) {
-    if (channelPWM >= 1500) { // 1500 - это примерно когда стик вверх (тумблер)
+    if (channelPWM >= 1670) {
       cam->sendChangeIRColorMode();
-    } else if (channelPWM <= 450) { // нижнее положение тумблера
+    } else if (channelPWM <= 300) {
       cam->sendChangeWindowMode();
     }
   } else {
@@ -67,17 +56,16 @@ bool onVideoFormatChange(const String& eventName, uint16_t ch[TOTAL_CHANNELS], c
   return true;
 }
 
-// Обработчик отлова события зумирования
 bool onZoomChange(const String& eventName, uint16_t ch[TOTAL_CHANNELS], const String& condition) {
   uint16_t channelPWM = ch[ZOOM_CHANNEL];
   TapotekCamera* cam = (TapotekCamera*)zcam.camera();
 
   if (cam) {
-    if (channelPWM >= 1500) {
+    if (channelPWM >= 1670) {
       cam->sendZoomIn();
-    } else if (channelPWM >= 800 && channelPWM <= 1100) {
+    } else if (channelPWM >= 600 && channelPWM <= 1300) {
       cam->sendZoomStop();
-    } else if (channelPWM <= 450) {
+    } else if (channelPWM <= 300) {
       cam->sendZoomOut();
     }
   } else {
@@ -87,18 +75,17 @@ bool onZoomChange(const String& eventName, uint16_t ch[TOTAL_CHANNELS], const St
   return true;
 }
 
-// Обработчик события жесткого управления положения камеры (три позиции - вверх, по центру и вниз)
 bool onPitchToggleChange(const String& eventName, uint16_t ch[TOTAL_CHANNELS], const String& condition) {
   uint16_t channelPWM = ch[PITCH_TOGGLE_CHANNEL];
   TapotekCamera* cam = (TapotekCamera*)zcam.camera();
 
   if (cam) {
-    if (channelPWM >= 1500) { 
-      cam->sendPitchToUp(); // камера смотрит вверх
-    } else if (channelPWM >= 800 && channelPWM <= 1100) { 
-      cam->sendCenterPitch(); // центральное положение
-    } else if (channelPWM <= 450) {
-      cam->sendPitchToDown(); // камера смотрит ровно вниз (90 градусов)
+    if (channelPWM >= 1670) {
+      cam->sendPitchToUp();
+    } else if (channelPWM >= 600 && channelPWM <= 1300) {
+      cam->sendCenterPitch();
+    } else if (channelPWM <= 300) {
+      cam->sendPitchToDown();
     }
   } else {
     return false;
@@ -107,7 +94,17 @@ bool onPitchToggleChange(const String& eventName, uint16_t ch[TOTAL_CHANNELS], c
   return true;
 }
 
-// Обработчик события для мягкого управления PITCH камеры (не советую использовать, находится в разработке)
+bool onPositionCenterFired(const String& eventName, uint16_t ch[TOTAL_CHANNELS], const String& condition) {
+
+  TapotekCamera* cam = (TapotekCamera*)zcam.camera();
+
+  if (cam) {
+    cam->sendCenterPitch();
+  }
+
+  return true;
+}
+
 bool onPitchXYChange(const String& /*eventName*/, uint16_t ch[], const String& /*condition*/) {
   const int center = 930;
   const int dead = 200;
@@ -155,41 +152,57 @@ bool onPitchXYChange(const String& /*eventName*/, uint16_t ch[], const String& /
 
 void setup() {
 
-  // Log и порт камеры запускаем на 115200 бод
-  logSerial.begin(115200);
   camSerial.begin(115200);
-  sbus.begin(); // стартуем SBUS
+  sbus.begin();
 
-  delay(100); // приостанавливаем работу на 100 мс
+  delay(100);
 
-  // Установка стандартного значения для всех каналов в 0
-  for (uint8_t i = 0; i < TOTAL_CHANNELS; ++i) channels[i] = 0;
+  for (uint8_t i = 0; i < 16; ++i) channels[i] = 0;
 
-  // Запускаем обработку камер
   ZCamProvider::registerDefaults();
 
-  // Выбираем поддерживаемую камеру (для большенства Tapotek подходит описанная ниже)
-  auto* cam = ZCamProvider::createCamera(F("tapotek.KHP290G609"), F("baud=115200;pin=2,3"));
+  TapotekCamera* cam = ZCamProvider::createCamera(F("tapotek.KHP290G609"), F("baud=115200;pin=2,3"));
 
-  // Если камеру удалось запустить (внутренняя логика, не реальная камера), то регистрируем ее внутри сервиса и задаем ей порт
   if (cam) {
     zcam.registerCamera(cam, /*takeOwnership=*/true);
     zcam.setCameraSerial(camSerial);
     zcam.initCamera();
   }
 
-  // Регистрируем обработчики событий на конкретные события
-  // СОВЕТ: При первом использовании включать только один обработчик и по одному подключать последующие
-  zcam.addEventHandler("channel" + String(VIDEO_FORMAT_CHANNEL), "", onVideoFormatChange); // Ловим канал для управления режимами видео (тепловизор и выбор камеры)
-  zcam.addEventHandler("channel" + String(ZOOM_CHANNEL), "", onZoomChange); // Ловим канал управления зумированием
-  zcam.addEventHandler("channel" + String(PITCH_TOGGLE_CHANNEL), "", onPitchToggleChange); // Ловим жесткое управление позицией PITCH камеры
-  zcam.addCombinedEventHandler(pitchChannels, 2, +onPitchXYChange, /*changeThreshold=*/5, "pitchXY"); // Комбинированный метод захвата событий сразу на нескольких каналах для работы мягкого PITCH
+  // Registering event handlers for channels changed values
+  zcam.addEventHandler("channel" + String(VIDEO_FORMAT_CHANNEL), "", onVideoFormatChange);
+  zcam.addEventHandler("channel" + String(ZOOM_CHANNEL), "", onZoomChange);
+  zcam.addEventHandler("channel" + String(PITCH_TOGGLE_CHANNEL), "", onPitchToggleChange);
+  zcam.addEventHandler("channel" + String(POSITION_CENTER_CHANNEL), ">=1650", onPositionCenterFired);
+  zcam.addCombinedEventHandler(pitchChannels, 2, +onPitchXYChange, /*changeThreshold=*/5, "pitchXY");
+}
+
+inline void print4u(Stream& s, uint16_t v) {
+  if (v < 10) s.print(F("000"));
+  else if (v < 100) s.print(F("00"));
+  else if (v < 1000) s.print(F("0"));
+  s.print(v);
 }
 
 void loop() {
-
-  // Если SBUS доступен и отдает ответ, то запускаем обработку ZCam и передаем туда обновленные PWM значения каналов
   if (sbus.read(channels, &failsafe, &lostFrame)) {
-    zcam.tick(channels);
+    brokenSignal = false;  // If channel FS or detected is broken signal
+    uint8_t countChangedChannels = 0;
+
+    for (int i = 0; i < 16; i++) {
+      if (lastChannels[i] != channels[i]) {
+        ++countChangedChannels;
+      }
+
+      lastChannels[i] = channels[i];
+    }
+
+    if (countChangedChannels > 9) {
+      brokenSignal = true;
+    }
+
+    if (!failsafe && !brokenSignal) {
+      zcam.tick(channels);
+    }
   }
 }

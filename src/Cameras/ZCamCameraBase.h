@@ -12,7 +12,7 @@ public:
 
   virtual bool init(const String & /*params*/) override { return init(); }
 
-  void setSerial(SoftwareSerial& ser) override { _serial = &ser; }
+  void setSerial(SoftwareSerial &ser) override { _serial = &ser; }
 
   virtual bool sendPitchToUp();
   virtual bool sendPitchToDown();
@@ -28,5 +28,5 @@ public:
 protected:
   ZCamData _data;
 
-  SoftwareSerial* _serial = nullptr;
+  SoftwareSerial *_serial = nullptr;
 };

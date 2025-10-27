@@ -27,6 +27,9 @@ bool TapotekCamera::sendCommandWithCRC(const char *cmdWithoutCRC)
 
 bool TapotekCamera::sendCommandWithCRC(const char *cmdWithoutCRC, String &outResponse, uint16_t timeoutMs)
 {
+  // Debounce variable
+  unsigned long now = millis();
+
   if (!_serial)
     return false;
 
@@ -36,25 +39,45 @@ bool TapotekCamera::sendCommandWithCRC(const char *cmdWithoutCRC, String &outRes
   char fullCmd[64];
   snprintf(fullCmd, sizeof(fullCmd), "%s%02X", cmdWithoutCRC, lowByte);
 
+  // Debounce continued
+  if ((now - lastCmdTime < 1000) && (strcmp(fullCmd, _lastCmd) == 0))
+  {
+    return false;
+  }
+
+  // Sending command to Camera
   _serial->println(fullCmd);
 
-  String resp;
-  if (!readResponseLine(resp, timeoutMs))
+  if (_logSerial)
   {
-    return false;
-  }
-  outResponse = resp;
-
-  uint8_t err = 0;
-  if (isErrorResponse(resp, &err))
-  {
-    return false;
+    _logSerial->print("> TapotekCamera::sendCommandWithCRC( \"");
+    _logSerial->print(fullCmd);
+    _logSerial->print("\" );");
+    _logSerial->println();
   }
 
-  if (!matchesEchoWithSwappedAddrs(String(fullCmd), resp))
-  {
-    return false;
-  }
+  // delay(100);
+
+  // String resp;
+  // if (!readResponseLine(resp, timeoutMs))
+  // {
+  //   return false;
+  // }
+  // outResponse = resp;
+
+  // uint8_t err = 0;
+  // if (isErrorResponse(resp, &err))
+  // {
+  //   return false;
+  // }
+
+  // if (!matchesEchoWithSwappedAddrs(String(fullCmd), resp))
+  // {
+  //   return false;
+  // }
+
+  lastCmdTime = millis();
+  strncpy(_lastCmd, fullCmd, sizeof(_lastCmd));
 
   return true;
 }

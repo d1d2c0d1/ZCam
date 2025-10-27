@@ -1,6 +1,8 @@
 #pragma once
 #include "ZCamCameraBase.h"
 
+class SoftwareSerial;
+
 class TapotekCamera : public ZCamCameraBase
 {
 public:
@@ -15,7 +17,7 @@ public:
   bool sendPitchToDown();
   bool sendCenterPitch();
   virtual bool centerPosition() override;
-  bool sendGimbalMove(const String& direction = "stop");
+  bool sendGimbalMove(const String &direction = "stop");
 
   bool sendZoomStop();
   bool sendZoomOut();
@@ -24,6 +26,8 @@ public:
   bool sendChangeIRColorMode();
   bool sendChangeWindowMode();
 
+  void setLogSerial(SoftwareSerial &ser) { _logSerial = &ser; }
+
 protected:
   uint16_t calculateChecksum(const char *cmd);
   bool readResponseLine(String &out, uint16_t timeoutMs);
@@ -31,4 +35,8 @@ protected:
   bool isErrorResponse(const String &resp, uint8_t *errCodeHex /*nullable*/);
   bool extractAddrs(const String &frame, String &src2, String &dst2);
   static void trimLine(String &s);
+
+  SoftwareSerial *_logSerial = nullptr;
+  char _lastCmd[64];
+  unsigned long lastCmdTime = 0;
 };
