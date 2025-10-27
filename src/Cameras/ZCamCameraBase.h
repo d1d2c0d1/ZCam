@@ -14,7 +14,15 @@ public:
 
   void setSerial(SoftwareSerial& ser) override { _serial = &ser; }
 
+  virtual bool sendPitchToUp();
+  virtual bool sendPitchToDown();
+  virtual bool sendCenterPitch();
   virtual bool centerPosition() override { return true; }
+
+  virtual bool sendZoomStop();
+  virtual bool sendZoomOut();
+  virtual bool sendZoomIn();
+
   virtual ZCamDataPosition getPosition() const override { return _data.position; }
 
 protected:
